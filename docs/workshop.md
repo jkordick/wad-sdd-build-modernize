@@ -192,11 +192,11 @@ This repo ships with an example `.github/copilot-instructions.md` you can inspec
 
 > 💻 **In the Copilot CLI:** the same files are picked up automatically — `.github/copilot-instructions.md`, `.github/instructions/**/*.instructions.md` and `AGENTS.md` — when you launch `copilot` inside the repo. No additional configuration needed.
 
-> 🤖 **In Claude Code:** the primary project-level instructions file is **`CLAUDE.md`** at the repo root (create it with `/init` inside `claude`). Claude Code also honors `AGENTS.md` in the same nested-merge way as Copilot, so keeping shared rules in `AGENTS.md` and tool-specific overrides in `CLAUDE.md` / `.github/copilot-instructions.md` works well. Personal-scope memory lives at `~/.claude/CLAUDE.md`. The same "concrete, verifiable, project-scoped" rules of thumb apply.
+> 🤖 **In Claude Code:** the primary project-level instructions file is **`CLAUDE.md`** at the repo root (create it with `/init` inside `claude`). Claude Code reads `CLAUDE.md`, **not** `AGENTS.md` directly — but you can bridge the two by either symlinking (`ln -s AGENTS.md CLAUDE.md`) or by having a `CLAUDE.md` that imports it with `@AGENTS.md` on the first line (and adding Claude-specific rules below). Nested `CLAUDE.md` files in subfolders are loaded on demand when Claude reads files there; for path-scoped rules, drop markdown files with a `paths:` frontmatter into `.claude/rules/`. Personal-scope memory lives at `~/.claude/CLAUDE.md`. The same "concrete, verifiable, project-scoped" rules of thumb apply.
 
 <div class="tip" data-title="Rule of thumb for multi-tool repos">
 
-> Put rules that apply to **every** agent in `AGENTS.md`. Put tool-specific tweaks in `.github/copilot-instructions.md` (Copilot) and `CLAUDE.md` (Claude Code). Anything in all three files should be identical — otherwise agents will disagree.
+> Put rules that apply to **every** agent in `AGENTS.md`. GitHub Copilot reads it directly; make Claude Code see it too by symlinking `CLAUDE.md` → `AGENTS.md`, or by adding a one-line `CLAUDE.md` with `@AGENTS.md`. Put tool-specific tweaks in `.github/copilot-instructions.md` (Copilot) and the rest of `CLAUDE.md` (Claude Code). Anything shared across tools should live in one file — otherwise agents will disagree.
 
 </div>
 
@@ -265,7 +265,7 @@ Pick the agent from the mode dropdown in VS Code Chat, or use it in the Copilot 
 > You are a testing specialist ... (same body as above)
 > ```
 >
-> List them with `/agents` and invoke them by mentioning them in a prompt (*"use the test-specialist subagent to add tests for src/auth.ts"*). Claude Code will delegate to a fresh, isolated context window per subagent invocation — great for keeping the main session lean.
+> Discover them via the `@` typeahead in a `claude` session, or invoke them by mentioning them in a prompt (*"use the test-specialist subagent to add tests for src/auth.ts"*). Claude Code delegates to a fresh, isolated context window per subagent invocation — great for keeping the main session lean. You can also make one the default for the whole session with `claude --agent test-specialist`.
 
 ## 1.6 Agent skills
 
@@ -337,8 +337,8 @@ Once connected, the agent can call those tools by name.
 | Ask (Q&A) | ✅ (Chat "Ask") | Just ask | Just ask |
 | Agent (autonomous) | ✅ (Chat "Agent") | Always | Always |
 | Plan mode | — | `Shift+Tab` | `Shift+Tab` |
-| Project instructions | `.github/copilot-instructions.md` + `AGENTS.md` | same as VS Code | `CLAUDE.md` + `AGENTS.md` |
-| Scoped instructions | `.github/instructions/*.instructions.md` (`applyTo` glob) | same as VS Code | nested `AGENTS.md` / `CLAUDE.md` per folder |
+| Project instructions | `.github/copilot-instructions.md` + `AGENTS.md` | same as VS Code | `CLAUDE.md` (import `AGENTS.md` via `@AGENTS.md` or symlink) |
+| Scoped instructions | `.github/instructions/*.instructions.md` (`applyTo` glob) | same as VS Code | nested `CLAUDE.md` per folder + `.claude/rules/*.md` with `paths:` frontmatter |
 | Reusable prompts | `.github/prompts/*.prompt.md` | (use agents/skills) | `.claude/commands/*.md` |
 | Custom agents / subagents | `.github/agents/*.agent.md` | same, plus built-ins | `.claude/agents/*.md` |
 | Skills | `.github/skills/**/SKILL.md` (agentskills.io) | same as VS Code | `.claude/skills/**/SKILL.md` (same standard) |
@@ -416,7 +416,14 @@ Add a minimal `AGENTS.md` in the `duck-emporium/` folder:
 - Payments are MOCKED. Never integrate a real payment provider.
 ```
 
-Because both GitHub Copilot and Claude Code honor `AGENTS.md`, this single file is enough for both — no duplication needed.
+GitHub Copilot honors `AGENTS.md` directly. Claude Code reads `CLAUDE.md`, so add a tiny bridge so both tools see the same rules from one file — either a one-line `duck-emporium/CLAUDE.md` containing `@AGENTS.md`, or a symlink:
+
+```bash
+# from inside duck-emporium/
+ln -s AGENTS.md CLAUDE.md
+```
+
+(On Windows without Developer Mode, use the `@AGENTS.md` import file instead.) Now both tools read the same rules from the same source.
 
 ### 2.2.2 Add the SDD prompt files
 
@@ -781,42 +788,48 @@ At this point the artifacts you produced in earlier phases pay off again: the ar
 
 ## 4.6 Hands-on: modernize a legacy application
 
-I prepared a java legacy application for you to modernize. You can find it [here](https://github.com/jkordick/training-java-monolith-refactor). Based on this example we will apply through the different phases with the help of SDD. For each phase we will do a separate SDD loop.
+I prepared a Java legacy application for you to modernize. You can find it [here](https://github.com/jkordick/training-java-monolith-refactor). Based on this example we will apply through the different phases with the help of SDD. For each phase we will do a separate SDD loop.
 
 After cloning the repository initialize spec-kit as done before in chapter 3.1.
 
-Then run **one spec-kit loop per phase**. Each phase's kick-off is a single `/speckit.specify` prompt — spec-kit takes it from there through `/speckit.plan`, `/speckit.tasks` and `/speckit.implement`. Keep prompts short: state the phase's goal, the inputs to read, the output artifact, and one guardrail. Answer clarifying questions as they come.
+Then run **one full spec-kit loop per phase**. Treat each phase's *modernization activity itself* as the "feature" being built: `/speckit.specify` describes the deliverables and constraints, `/speckit.plan` designs the approach (reading order, tooling, heuristics), `/speckit.tasks` breaks it into work items, and `/speckit.implement` executes them and produces the actual artifacts. The kick-off prompts below only cover `/speckit.specify` — spec-kit prompts you for the rest.
+
+<div class="tip" data-title="Why specify the activity, not just do it">
+
+> Reverse engineering, auditing, re-architecting and deploying are all non-trivial pieces of work with their own failure modes. Specifying them first forces you (and the agent) to be explicit about *what "done" looks like* before any file is touched — which is the whole point of SDD.
+
+</div>
 
 ### Phase 1 — Rediscovery
 
 ```text
-/speckit.specify Reverse-engineer this legacy Java monolith. Read the source, tests and any docs. Produce a rediscovery spec covering: (1) business rules in plain English with concrete examples, (2) the data model — entities, relationships, invariants (including those enforced only by defensive code or DB constraints), (3) an integration inventory (every external system, filesystem path, hard-coded endpoint), (4) an open-questions list for anything you cannot resolve from the code alone. Do not propose changes and do not write code. Stop and ask before guessing behavior.
+/speckit.specify Specify a rediscovery of this legacy Java monolith. Deliverables: (1) a business-rules document in plain English with concrete code references and examples, (2) a data-model summary — entities, relationships, invariants (including those enforced only by defensive code or DB constraints), (3) an integration inventory (every external system, filesystem path, hard-coded endpoint), (4) an open-questions list for anything the code alone cannot answer. Constraints: no code changes, no modernization proposals, stop and ask before guessing behavior. Success: a domain reviewer can validate each rule against a concrete code reference.
 ```
+
+Then run `/speckit.plan`, `/speckit.tasks`, `/speckit.implement` to design the reading order, split by module/subsystem, and produce the artifacts. Do the same after each `/speckit.specify` in the phases below.
 
 ### Phase 2 — Substitution audit
 
 ```text
-/speckit.specify Read the rediscovery spec from phase 1. Produce a substitution audit: for each rediscovered element decide keep-as-is, replace-with-library, replace-with-platform, or retire. Cover home-grown code with modern equivalents, integrations that have moved on, data stores that no longer fit, EOL runtimes/frameworks, and operational assumptions that don't survive in the cloud. Output a table with columns: legacy element, proposal, reason, trade-off. Do not design the new architecture.
+/speckit.specify Specify a substitution audit over the rediscovery artifacts (phase 1). Deliverables: (1) a substitution-audit table with columns *legacy element*, *proposal* (keep-as-is | replace-with-library | replace-with-platform | retire), *reason*, *trade-off*; (2) coverage spanning home-grown code with modern equivalents, dated integrations, unfit data stores, EOL runtimes/frameworks, and cloud-hostile operational assumptions. Constraint: audit only — do not design the new architecture. Success: every row links back to a specific rediscovery entry.
 ```
 
 ### Phase 3a — Re-architecture
 
 ```text
-/speckit.specify Read the rediscovery spec (phase 1) and the substitution audit (phase 2). Produce a target architecture spec for the modernized system covering: target runtime and platform, module/service boundaries with justifications tied to business rules, data model and migration path from the legacy schema, integration contracts replacing each flagged legacy integration, cross-cutting concerns (auth, logging, config, secrets, observability), migration strategy (default to strangler-fig), and risks. Do not write code.
+/speckit.specify Specify the target architecture for the modernized system, informed by the rediscovery (phase 1) and substitution audit (phase 2). Deliverables: (1) target runtime and platform, (2) module/service boundaries, (3) data model and migration path from the legacy schema, (4) integration contracts replacing each flagged legacy integration, (5) cross-cutting concerns (auth, logging, config, secrets, observability), (6) migration strategy (default: strangler-fig), (7) risks. Constraint: architecture only — no code, no per-module rewrite tasks yet. Success: every architectural choice traces back to either a preserved business rule or a substitution-audit row.
 ```
 
 ### Phase 3b — Re-write
 
 ```text
-/speckit.specify Read the rediscovery spec, substitution audit and target architecture. Produce a re-write spec for the first module to migrate. Every functional requirement must map to a behavior-preserving acceptance test derived from phase 1's business rules. Route the new implementation behind the same interface as the legacy code so traffic can be switched gradually. If a business rule is ambiguous or missing, stop and ask — never invent behavior.
+/speckit.specify Specify the rewrite of a single module (module boundaries defined in the re-architecture, phase 3a), informed by the rediscovery (phase 1), substitution audit (phase 2) and target architecture (phase 3a). Deliverables: (1) functional requirements for the module, (2) behavior-preserving acceptance tests derived from the phase-1 business rules — every functional requirement must map to at least one, (3) an interface contract identical to the legacy code so traffic can be switched gradually. Constraint: if a business rule is ambiguous or missing, stop and ask — never invent behavior. Note: repeat this phase-3b loop module by module until the legacy code path is empty. Success: legacy and new implementation produce identical results for the acceptance tests.
 ```
-
-Repeat phase 3b module by module until the legacy code path is empty.
 
 ### Phase 4 (optional) — CI/CD and deployment
 
 ```text
-/speckit.specify Read the target architecture (phase 3a) and the current build/test setup. Produce a deployment spec covering: CI pipeline (build, test, scan), infrastructure-as-code for the platform chosen in phase 3a, secrets/config/observability wiring, promotion path dev → staging → production, rollback path, and the strangler-fig traffic-shifting mechanism for the modules rewritten in phase 3b. Do not deploy yet.
+/speckit.specify Specify the deployment for the modernized system, informed by the target architecture (phase 3a) and the current build/test setup. Deliverables: (1) CI pipeline (build, test, scan), (2) infrastructure-as-code for the platform chosen in the re-architecture (phase 3a), (3) secrets/config/observability wiring, (4) promotion path dev → staging → production, (5) rollback path, (6) strangler-fig traffic-shifting mechanism for modules rewritten in phase 3b. Constraint: no live deployment during specify/plan/tasks. Success: from these artifacts alone, a fresh environment can be created and a rewritten module cut over end-to-end.
 ```
 
 
